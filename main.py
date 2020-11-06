@@ -28,9 +28,19 @@ for i in address.values():
 
 
 #Função para conectar a API
-def connect(temp, ip, address, mode, fan, setPoint):
+def connect(off, temp, ip, address, mode, fan, setPoint):
     http = urllib3.PoolManager()
+    if off == 1: mode = '0'
+
+    if mode == '1': mode = '2'
+    elif mode == '2': mode = '1'
+    else: mode = '0'
+
+    if fan == '0': fan='2'
+    elif fan == '2': fan = '0'
+
     url = "https://certigarve.pt/mti/plan1/v7/" + str(temp) + "/" + ip.replace(".","-") + "/" + address + "/" + mode + "/" + fan + "/" + setPoint +"/ModbusAC/"
+    print(url)
     res = http.request('GET',url)
     return res.data.decode("utf-8")
     ''' Plataform return
@@ -40,7 +50,7 @@ def connect(temp, ip, address, mode, fan, setPoint):
 
 #Função para tomada de decisão
 def decision(dados, resposta):
-#---- Quando a plataforma tem prioridade
+#---- Quando a plataforma tem prioridade e está no modo automatico
     if resposta[4] == 1: 
         if resposta[0] == 0: #Desligado
             ac.write_single_register(regOn,0)
@@ -71,21 +81,39 @@ def decision(dados, resposta):
                 ac.write_single_register(regFan,1) #Ventilação medium
                 ac.write_single_register(regSetPoint,180) #Set point 18C
                 return 'Mode: Cool'
-        if dados[3] != resposta[2]: #Verifica se a Fan é igual ao que está na plataforma
-            ac.write_single_coil(regFan,resposta[2])
-
-        if dados[2] != resposta[3]: #Verifica se o setPoint é igual ao que está na plataforma
-            ac.write_single_register(regSetPoint,resposta[3])
 
 #------ Quando o controle tem prioridade
     elif resposta[4] == 0:
         return 'Controle com a prioridade'
 
+    elif resposta[4] == 2:
+        if resposta[0] == 0:
+            ac.write_single_register(regOn,0)
+
+        elif resposta[0] == 1:
+            ac.write_single_register(regOn,1)
+            ac.write_single_register(regMode,2)
+
+        elif resposta[0] == 2:
+            ac.write_single_register(regOn,1)
+            ac.write_single_register(regMode,1)
+
+        ac.write_single_register(regSetPoint,resposta[3])
+
+        if resposta[2] == 0:
+            ac.write_single_register(regFan,2)
+        elif resposta[2] == 2:
+            ac.write_single_register(regFan,0)
+        else:
+            ac.write_single_register(regFan,1)
+        
+        return 'Platorma no modo manual'
+
 
 
 #Função para Loop de leituras e comunicações
 def routineLoop ():
-    global ac, dados
+    global ac, dados, off
     
     for i in ip: #Entra na lista de ip's
         for x in add[ip.index(i)]: #entra na lista de endereços
@@ -94,9 +122,11 @@ def routineLoop ():
             dados = ac.read_holding_registers(2,26)
             if bool(readTemp) == False: #Se o valor for falso pula para o próximo ac
                 break
-            if dados[0] == 0: dados[3] = 0
-            resposta = connect(int(readTemp[0]),str(i),str(x),str(dados[1]),str(dados[3]),str(dados[2])) #Envia os dados para API e recebe a resposta
+            if dados[0] == 0: off = 1
+            else: off = 0
+            resposta = connect(off,int(readTemp[0]),str(i),str(x),str(dados[1]),str(dados[3]),str(dados[2])) #Envia os dados para API e recebe a resposta
             resposta = json.loads(resposta)
+            print('Recebido: ' + str(resposta))
             decisao = decision(dados, resposta)
             d = datetime.now()
             print(decisao + " | " + str(d.hour) + ":" + str(d.minute) + ":" + str(d.second))
